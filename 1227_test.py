@@ -35,9 +35,9 @@ class LineTracerWithObstacleAvoidance:
         # 차폭 (13cm)
         self.robot_width = 0.13
 
-        # 🔥 [수정 1] 라바콘 구간 종료 판단을 위한 변수 추가
-        self.seen_lavacon = False   # 라바콘을 한 번이라도 봤는지
-        self.passed_lavacon_section = False # 라바콘 구간이 끝났는지
+        # 🔥 라바콘 구간 종료 판단 변수
+        self.seen_lavacon = False       # 라바콘을 본 적이 있는가?
+        self.passed_lavacon_section = False # 라바콘 구간이 끝났는가?
         self.last_lavacon_time = rospy.Time.now().to_sec()
 
     # ============================================================
@@ -100,8 +100,8 @@ class LineTracerWithObstacleAvoidance:
 
             # 라바콘이 감지됨
             if len(red_contours) >= 1:
-                self.seen_lavacon = True            # 라바콘을 봤음!
-                self.last_lavacon_time = now        # 마지막 본 시간 갱신
+                self.seen_lavacon = True            # 라바콘 발견 기록
+                self.last_lavacon_time = now        # 마지막 발견 시간 갱신
                 
                 centers = []
                 for cnt in red_contours:
@@ -130,19 +130,18 @@ class LineTracerWithObstacleAvoidance:
             # 🔥 2) 라바콘이 없는 경우 (라인 트레이싱)
             # ================================================
             
-            # 🔥 [수정 2] 라바콘 구간 종료 판단
-            # 라바콘을 이전에 본 적이 있고, 마지막으로 본 지 2초가 지났다면 -> 검은색 라인 모드로 전환
-            if self.seen_lavacon and (now - self.last_lavacon_time > 2.0):
+            # 🔥 [수정] 라바콘 안 보인지 5초 지났는지 확인 (기존 2.0 -> 5.0)
+            if self.seen_lavacon and (now - self.last_lavacon_time > 5.0):
                 self.passed_lavacon_section = True
 
-            # 🔥 [수정 3] 모드에 따른 색상 설정
+            # 모드에 따른 색상 설정
             if self.passed_lavacon_section:
-                # 검은색 라인 (바닥) 감지 범위
-                # V값이 낮을수록 어두운 색(검은색)입니다. 필요시 60을 조절하세요.
+                # 검은색 라인 감지 (바닥)
+                # 필요시 V값(밝기) 상한 60을 환경에 맞춰 조절하세요
                 lower_line = np.array([0, 0, 0])
                 upper_line = np.array([180, 255, 60]) 
             else:
-                # 기존 흰색 라인 감지 범위
+                # 기존 흰색 라인 감지
                 lower_line = np.array([0, 0, 180])
                 upper_line = np.array([180, 40, 255])
 
@@ -150,7 +149,6 @@ class LineTracerWithObstacleAvoidance:
             contours, _ = cv2.findContours(mask_line, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
             if len(contours) == 0:
-                # 라인을 놓쳤을 때 (검은색 모드면 천천히 수색)
                 twist.linear.x = 0.06
                 twist.angular.z = 0.4
                 self.pub.publish(twist)
@@ -163,19 +161,17 @@ class LineTracerWithObstacleAvoidance:
             cx = int(M["m10"] / M["m00"])
             error = cx - w//2
 
-            # 검은색 라인을 탈 때는 속도를 조금 줄이거나 회전 감도를 조절해도 좋습니다.
             twist.linear.x = 0.14
             twist.angular.z = error / 200.0
             self.pub.publish(twist)
             return
 
     # ============================================================
-    # BACK MODE (변경 없음)
+    # BACK / ESCAPE / GAP / UTIL (기존 유지)
     # ============================================================
     def back_control(self):
         twist = Twist()
         now = rospy.Time.now().to_sec()
-
         if now - self.state_start < 1.2:
             twist.linear.x = -0.15
             twist.angular.z = 0.0
@@ -187,13 +183,9 @@ class LineTracerWithObstacleAvoidance:
             self.state = "ESCAPE"
             self.state_start = now
 
-    # ============================================================
-    # ESCAPE MODE (변경 없음)
-    # ============================================================
     def escape_control(self):
         twist = Twist()
         now = rospy.Time.now().to_sec()
-
         if now - self.state_start < 1.0:
             twist.linear.x = 0.12
             twist.angular.z = self.escape_angle * 1.3
@@ -201,9 +193,6 @@ class LineTracerWithObstacleAvoidance:
         else:
             self.state = "LANE"
 
-    # ============================================================
-    # 기타 유틸 함수 (변경 없음)
-    # ============================================================
     def apply_escape_direction_logic(self, angle):
         if self.force_right_escape > 0:
             self.force_right_escape -= 1
